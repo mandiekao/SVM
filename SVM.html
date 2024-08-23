@@ -1,0 +1,298 @@
+<html><head><base href="https://ai.websim.dev/" /></head><body><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SVM Classification Demo</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/numeric/1.2.6/numeric.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #000;
+            color: #00ffff;
+        }
+        #controls {
+            margin: 20px;
+        }
+        #charts {
+            display: flex;
+            justify-content: space-around;
+            width: 100%;
+        }
+        #scatter2D, #surface3D {
+            width: 45%;
+            height: 500px;
+            border: 1px solid #00ffff;
+            box-shadow: 0 0 10px #00ffff;
+        }
+        button {
+            background-color: #00ffff;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        button:hover {
+            background-color: #00cccc;
+            box-shadow: 0 0 15px #00ffff;
+        }
+    </style>
+</head>
+<body>
+    <h1>SVM Classification Demo with RBF Kernel</h1>
+    <div id="controls">
+        <button id="generateData">Generate New Data</button>
+    </div>
+    <div id="charts">
+        <div id="scatter2D"></div>
+        <div id="surface3D"></div>
+    </div>
+    <script>
+        // Generate random points with circular distribution
+        function generatePoints(numPoints) {
+            const points = [];
+            const labels = [];
+
+            for (let i = 0; i < numPoints; i++) {
+                const angle = Math.random() * 2 * Math.PI;
+                const radius = Math.random() * 6;
+                const x = radius * Math.cos(angle);
+                const y = radius * Math.sin(angle);
+
+                points.push([x, y]);
+                labels.push(radius < 3 ? 1 : -1);
+            }
+
+            return { points, labels };
+        }
+
+        // RBF kernel function
+        function rbf(x1, x2, gamma) {
+            const diff = numeric.sub(x1, x2);
+            const squaredDist = numeric.dot(diff, diff);
+            return Math.exp(-gamma * squaredDist);
+        }
+
+        // SVM training using SMO algorithm
+        function trainSVM(points, labels, C, gamma, maxPasses) {
+            const N = points.length;
+            const alphas = new Array(N).fill(0);
+            let b = 0;
+
+            function calculateError(index) {
+                let sum = 0;
+                for (let i = 0; i < N; i++) {
+                    sum += alphas[i] * labels[i] * rbf(points[i], points[index], gamma);
+                }
+                return sum + b - labels[index];
+            }
+
+            let passes = 0;
+            while (passes < maxPasses) {
+                let numChangedAlphas = 0;
+                for (let i = 0; i < N; i++) {
+                    const Ei = calculateError(i);
+                    if ((labels[i] * Ei < -1e-5 && alphas[i] < C) || (labels[i] * Ei > 1e-5 && alphas[i] > 0)) {
+                        let j = i;
+                        while (j === i) {
+                            j = Math.floor(Math.random() * N);
+                        }
+                        const Ej = calculateError(j);
+
+                        const alphaIOld = alphas[i];
+                        const alphaJOld = alphas[j];
+
+                        let L, H;
+                        if (labels[i] !== labels[j]) {
+                            L = Math.max(0, alphas[j] - alphas[i]);
+                            H = Math.min(C, C + alphas[j] - alphas[i]);
+                        } else {
+                            L = Math.max(0, alphas[i] + alphas[j] - C);
+                            H = Math.min(C, alphas[i] + alphas[j]);
+                        }
+
+                        if (L === H) continue;
+
+                        const eta = 2 * rbf(points[i], points[j], gamma) - rbf(points[i], points[i], gamma) - rbf(points[j], points[j], gamma);
+                        if (eta >= 0) continue;
+
+                        alphas[j] = alphas[j] - (labels[j] * (Ei - Ej)) / eta;
+                        alphas[j] = Math.min(H, Math.max(L, alphas[j]));
+
+                        if (Math.abs(alphas[j] - alphaJOld) < 1e-5) continue;
+
+                        alphas[i] = alphas[i] + labels[i] * labels[j] * (alphaJOld - alphas[j]);
+
+                        const b1 = b - Ei - labels[i] * (alphas[i] - alphaIOld) * rbf(points[i], points[i], gamma) -
+                                   labels[j] * (alphas[j] - alphaJOld) * rbf(points[i], points[j], gamma);
+
+                        const b2 = b - Ej - labels[i] * (alphas[i] - alphaIOld) * rbf(points[i], points[j], gamma) -
+                                   labels[j] * (alphas[j] - alphaJOld) * rbf(points[j], points[j], gamma);
+
+                        if (0 < alphas[i] && alphas[i] < C) {
+                            b = b1;
+                        } else if (0 < alphas[j] && alphas[j] < C) {
+                            b = b2;
+                        } else {
+                            b = (b1 + b2) / 2;
+                        }
+
+                        numChangedAlphas++;
+                    }
+                }
+                if (numChangedAlphas === 0) {
+                    passes++;
+                } else {
+                    passes = 0;
+                }
+            }
+
+            return { alphas, b };
+        }
+
+        // SVM prediction function
+        function predict(point, points, labels, alphas, b, gamma) {
+            let sum = 0;
+            for (let i = 0; i < points.length; i++) {
+                sum += alphas[i] * labels[i] * rbf(points[i], point, gamma);
+            }
+            return sum + b;
+        }
+
+        function generateAndTrain() {
+            const data = generatePoints(100);
+            const points = data.points;
+            const labels = data.labels;
+
+            const C = 1.0;
+            const gamma = 0.1;
+            const maxPasses = 100;
+
+            const { alphas, b } = trainSVM(points, labels, C, gamma, maxPasses);
+
+            plot2D(points, labels, alphas, b, gamma);
+            plot3D(points, labels, alphas, b, gamma);
+        }
+
+        function plot2D(points, labels, alphas, b, gamma) {
+            const trace1 = {
+                x: points.filter((_, i) => labels[i] > 0).map(p => p[0]),
+                y: points.filter((_, i) => labels[i] > 0).map(p => p[1]),
+                mode: 'markers',
+                type: 'scatter',
+                name: 'Inner Circle',
+                marker: { color: '#00ffff', size: 8 }
+            };
+
+            const trace2 = {
+                x: points.filter((_, i) => labels[i] < 0).map(p => p[0]),
+                y: points.filter((_, i) => labels[i] < 0).map(p => p[1]),
+                mode: 'markers',
+                type: 'scatter',
+                name: 'Outer Ring',
+                marker: { color: '#ff00ff', size: 8 }
+            };
+
+            const gridSize = 100;
+            const x = numeric.linspace(-6, 6, gridSize);
+            const y = numeric.linspace(-6, 6, gridSize);
+            const z = [];
+
+            for (let i = 0; i < gridSize; i++) {
+                z[i] = [];
+                for (let j = 0; j < gridSize; j++) {
+                    z[i][j] = predict([x[i], y[j]], points, labels, alphas, b, gamma);
+                }
+            }
+
+            const trace3 = {
+                x: x,
+                y: y,
+                z: z,
+                type: 'contour',
+                colorscale: 'Jet',
+                contours: {
+                    start: -1,
+                    end: 1,
+                    size: 0.05
+                }
+            };
+
+            const layout = {
+                title: {
+                    text: '2D Scatter Plot with Decision Boundary',
+                    font: { color: '#00ffff' }
+                },
+                xaxis: { title: 'X', color: '#00ffff' },
+                yaxis: { title: 'Y', color: '#00ffff' },
+                plot_bgcolor: '#111',
+                paper_bgcolor: '#000',
+                font: { color: '#00ffff' }
+            };
+
+            Plotly.newPlot('scatter2D', [trace1, trace2, trace3], layout);
+        }
+
+        function plot3D(points, labels, alphas, b, gamma) {
+            const gridSize = 50;
+            const x = numeric.linspace(-6, 6, gridSize);
+            const y = numeric.linspace(-6, 6, gridSize);
+            const z = [];
+
+            for (let i = 0; i < gridSize; i++) {
+                z[i] = [];
+                for (let j = 0; j < gridSize; j++) {
+                    z[i][j] = predict([x[i], y[j]], points, labels, alphas, b, gamma);
+                }
+            }
+
+            const trace1 = {
+                x: x,
+                y: y,
+                z: z,
+                type: 'surface',
+                colorscale: 'Jet',
+                contours: {
+                    z: {
+                        show: true,
+                        usecolormap: true,
+                        highlightcolor: "#ff00ff",
+                        project: {z: true}
+                    }
+                }
+            };
+
+            const layout = {
+                title: {
+                    text: '3D Decision Boundary',
+                    font: { color: '#00ffff' }
+                },
+                scene: {
+                    xaxis: { title: 'X', color: '#00ffff' },
+                    yaxis: { title: 'Y', color: '#00ffff' },
+                    zaxis: { title: 'Decision Value', color: '#00ffff' },
+                    camera: {
+                        eye: {x: 1.5, y: 1.5, z: 1}
+                    }
+                },
+                plot_bgcolor: '#111',
+                paper_bgcolor: '#000',
+                font: { color: '#00ffff' }
+            };
+
+            Plotly.newPlot('surface3D', [trace1], layout);
+        }
+
+        document.getElementById('generateData').addEventListener('click', generateAndTrain);
+
+        // Initial generation and training
+        generateAndTrain();
+    </script>
+</body>
+</html>
+</body></html>

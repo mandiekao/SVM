@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SVM Interactive Demo</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/numeric/1.2.6/numeric.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #controls {
+            margin: 20px;
+        }
+        #charts {
+            display: flex;
+            justify-content: space-around;
+            width: 100%;
+        }
+        #scatter2D, #surface3D {
+            width: 45%;
+            height: 500px;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <button id="generateData">Generate New Data</button>
+    </div>
+    <div id="charts">
+        <div id="scatter2D"></div>
+        <div id="surface3D"></div>
+    </div>
+    <script>
+        function generatePoints(numPoints) {
+            const points = [];
+            const labels = [];
+
+            for (let i = 0; i < numPoints; i++) {
+                const angle = Math.random() * 2 * Math.PI;
+                const radius = Math.random() * 6;
+                const x = radius * Math.cos(angle);
+                const y = radius * Math.sin(angle);
+
+                points.push([x, y]);
+                labels.push(radius < 3 ? 1 : -1);
+            }
+
+            return { points, labels };
+        }
+
+        function rbf(x1, x2, gamma) {
+            const diff = x1.map((xi, i) => xi - x2[i]);
+            const normSquared = diff.reduce((sum, d) => sum + d * d, 0);
+            return Math.exp(-gamma * normSquared);
+        }
+
+        function trainSVM(points, labels, C, tol, maxPasses, gamma) {
+            const numPoints = points.length;
+            const alphas = Array(numPoints).fill(0);
+            let b = 0;
+            let passes = 0;
+
+            const K = Array.from({ length: numPoints }, (_, i) =>
+                Array.from({ length: numPoints }, (_, j) => rbf(points[i], points[j], gamma))
+            );
+
+            while (passes < maxPasses) {
+                let numChangedAlphas = 0;
+
+                for (let i = 0; i < numPoints; i++) {
+                    const E_i = alphas.reduce((sum, alpha_j, j) =>
+                        sum + alpha_j * labels[j] * K[j][i], b) - labels[i];
+
+                    if ((labels[i] * E_i < -tol && alphas[i] < C) || (labels[i] * E_i > tol && alphas[i] > 0)) {
+                        let j = i;
+                        while (j === i) {
+                            j = Math.floor(Math.random() * numPoints);
+                        }
+
+                        const E_j = alphas.reduce((sum, alpha_k, k) =>
+                            sum + alpha_k * labels[k] * K[k][j], b) - labels[j];
+
+                        const alpha_i_old = alphas[i];
+                        const alpha_j_old = alphas[j];
+
+                        let [L, H] = labels[i] !== labels[j] ?
+                            [Math.max(0, alphas[j] - alphas[i]), Math.min(C, C + alphas[j] - alphas[i])] :
+                            [Math.max(0, alphas[i] + alphas[j] - C), Math.min(C, alphas[i] + alphas[j])];
+
+                        if (L === H) continue;
+
+                        const eta = 2 * K[i][j] - K[i][i] - K[j][j];
+                        if (eta >= 0) continue;
+
+                        alphas[j] = alphas[j] - (labels[j] * (E_i - E_j)) / eta;
+                        alphas[j] = Math.min(H, Math.max(L, alphas[j]));
+
+                        if (Math.abs(alphas[j] - alpha_j_old) < 1e-5) continue;
+
+                        alphas[i] = alphas[i] + labels[i] * labels[j] * (alpha_j_old - alphas[j]);
+
+                        const b1 = b - E_i - labels[i] * (alphas[i] - alpha_i_old) * K[i][i] - labels[j] * (alphas[j] - alpha_j_old) * K[i][j];
+                        const b2 = b - E_j - labels[i] * (alphas[i] - alpha_i_old) * K[i][j] - labels[j] * (alphas[j] - alpha_j_old) * K[j][j];
+
+                        b = (0 < alphas[i] && alphas[i] < C) ? b1 : (0 < alphas[j] && alphas[j] < C) ? b2 : (b1 + b2) / 2;
+
+                        numChangedAlphas++;
+                    }
+                }
+
+                passes = numChangedAlphas === 0 ? passes + 1 : 0;
+            }
+
+            return { alphas, b };
+        }
+
+        function predict(point, model, points, labels, gamma) {
+            const { alphas, b } = model;
+            const sum = points.reduce((acc, xi, i) =>
+                acc + alphas[i] * labels[i] * rbf(point, xi, gamma), b);
+            return Math.sign(sum);
+        }
+
+        function generateAndTrain() {
+            const data = generatePoints(100);
+            const points = data.points;
+            const labels = data.labels;
+
+            const C = 1;
+            const tol = 0.001;
+            const maxPasses = 10;
+            const gamma = 0.5;
+
+            const model = trainSVM(points, labels, C, tol, maxPasses, gamma);
+            plot2D(points, labels, model, gamma);
+            plot3D(points, labels, model, gamma);
+        }
+
+        function plot2D(points, labels, model, gamma) {
+            const trace1 = {
+                x: points.filter((_, i) => labels[i] > 0).map(p => p[0]),
+                y: points.filter((_, i) => labels[i] > 0).map(p => p[1]),
+                mode: 'markers',
+                type: 'scatter',
+                name: 'Inner Circle',
+                marker: { color: 'blue' }
+            };
+
+            const trace2 = {
+                x: points.filter((_, i) => labels[i] < 0).map(p => p[0]),
+                y: points.filter((_, i) => labels[i] < 0).map(p => p[1]),
+                mode: 'markers',
+                type: 'scatter',
+                name: 'Outer Ring',
+                marker: { color: 'red' }
+            };
+
+            const layout = {
+                title: '2D Scatter Plot',
+                xaxis: { title: 'X' },
+                yaxis: { title: 'Y' }
+            };
+
+            Plotly.newPlot('scatter2D', [trace1, trace2], layout);
+        }
+
+        function plot3D(points, labels, model, gamma) {
+            const gridSize = 50;
+            const xRange = numeric.linspace(-7, 7, gridSize);
+            const yRange = numeric.linspace(-7, 7, gridSize);
+            const zData = xRange.map(x => yRange.map(y => predict([x, y], model, points, labels, gamma)));
+
+            const data = [{
+                x: xRange,
+                y: yRange,
+                z: zData,
+                type: 'surface'
+            }];
+
+            const layout = {
+                title: '3D Decision Boundary',
+                scene: {
+                    xaxis: { title: 'X' },
+                    yaxis: { title: 'Y' },
+                    zaxis: { title: 'Z' }
+                }
+            };
+
+            Plotly.newPlot('surface3D', data, layout);
+        }
+
+        document.getElementById('generateData').addEventListener('click', generateAndTrain);
+
+        // Initial generation and training
+        generateAndTrain();
+    </script>
+</body>
+</html>
